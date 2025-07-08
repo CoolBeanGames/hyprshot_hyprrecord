@@ -47,6 +47,7 @@ check_command "parecord"
 check_command "ffmpeg"
 check_command "notify-send"
 check_command "pactl" # For debugging audio sources
+check_command "wl-copy" # For copying file path to clipboard
 
 # --- Stop Recording Function ---
 stop_recording() {
@@ -93,8 +94,8 @@ stop_recording() {
         exit 0
     fi
 
-    # Build FFmpeg command arguments dynamically
-    ffmpeg_args=(
+    # Construct the full ffmpeg command using an array for robustness
+    ffmpeg_cmd=(
         ffmpeg
         -i "$VIDEO_TEMP_FILE_PATH"
     )
@@ -102,14 +103,14 @@ stop_recording() {
     AUDIO_INPUT_COUNT=0
 
     if [ "$MIC_AUDIO_OK" -eq 1 ]; then
-        ffmpeg_args+=( -i "$MIC_TEMP_FILE_PATH" )
+        ffmpeg_cmd+=( -i "$MIC_TEMP_FILE_PATH" )
         AUDIO_INPUT_COUNT=$((AUDIO_INPUT_COUNT + 1))
     else
         notify-send "Mic Audio Warning!" "Microphone audio file empty or not found. No mic audio will be included."
         echo "WARNING: Microphone audio file empty or not found. No mic audio will be included." >&2
     fi
     if [ "$OUTPUT_AUDIO_OK" -eq 1 ]; then
-        ffmpeg_args+=( -i "$OUTPUT_TEMP_FILE_PATH" )
+        ffmpeg_cmd+=( -i "$OUTPUT_TEMP_FILE_PATH" )
         AUDIO_INPUT_COUNT=$((AUDIO_INPUT_COUNT + 1))
     else
         notify-send "Output Audio Warning!" "System output audio file empty or not found. No system audio will be included."
@@ -120,13 +121,13 @@ stop_recording() {
     if [ "$AUDIO_INPUT_COUNT" -eq 2 ]; then
         # Both mic and output audio are present
         # FFmpeg inputs will be: 0=video, 1=mic_audio, 2=output_audio
-        ffmpeg_args+=( -filter_complex "[1:a][2:a]amix=inputs=2:duration=longest[aout]" )
-        ffmpeg_args+=( -map "[aout]" )
+        ffmpeg_cmd+=( -filter_complex "[1:a][2:a]amix=inputs=2:duration=longest[aout]" )
+        ffmpeg_cmd+=( -map "[aout]" )
         AUDIO_NOTIFY_MSG="(with mic and system audio)"
     elif [ "$AUDIO_INPUT_COUNT" -eq 1 ]; then
         # Only one audio source is present (either mic or output)
         # FFmpeg inputs will be: 0=video, 1=single_audio
-        ffmpeg_args+=( -map 1:a:0 )
+        ffmpeg_cmd+=( -map 1:a:0 ) # Audio is the second input (index 1 in ffmpeg_cmd)
         if [ "$MIC_AUDIO_OK" -eq 1 ]; then
             AUDIO_NOTIFY_MSG="(with microphone audio only)"
         else # Must be OUTPUT_AUDIO_OK
@@ -141,8 +142,8 @@ stop_recording() {
     notify-send "Merging Recording..." "Combining video and audio. This may may take a moment. $AUDIO_NOTIFY_MSG"
 
     # Add common video/audio encoding options
-    ffmpeg_args+=(
-        -map 0:v:0
+    ffmpeg_cmd+=(
+        -map 0:v:0 # Map the first video stream (from the first input, which is video)
         -c:v libx264
         -pix_fmt yuv420p
         -crf "$VIDEO_CRF"
@@ -154,10 +155,13 @@ stop_recording() {
     )
 
     # Execute the ffmpeg command
-    "${ffmpeg_args[@]}"
+    "${ffmpeg_cmd[@]}"
 
     if [ $? -eq 0 ]; then
         notify-send "Recording Saved!" "Saved to $(basename "$FINAL_OUTPUT_FILE_PATH") $AUDIO_NOTIFY_MSG."
+        # Copy the final file path to clipboard
+        wl-copy "$FINAL_OUTPUT_FILE_PATH"
+        notify-send "Clipboard Updated!" "Recording path copied to clipboard."
         rm -f "$VIDEO_TEMP_FILE_PATH" "$MIC_TEMP_FILE_PATH" "$OUTPUT_TEMP_FILE_PATH" # Clean up temp files
     else
         notify-send "Recording Error!" "Failed to merge video and audio with FFmpeg."
@@ -229,78 +233,3 @@ else
     echo "If audio still doesn't work, ensure your microphone and monitor sources are not muted and their volumes are up (e.g., pavucontrol)."
     echo "Check if 'pipewire' and 'wireplumber' services are running: 'systemctl --user status pipewire wireplumber'"
 fi
-```
-I acknowledge your output and the continued issue with the microphone audio.
-
-The error `Output with label 'aout' does not exist in any defined filter graph, or was already used elsewhere.` from `ffmpeg` is the direct cause of the script failing to finalize the video. This happens because the `amix` filter graph is not being correctly interpreted by `ffmpeg` when passed through the shell.
-
-My previous response included a corrected Canvas that uses a shell array (`ffmpeg_cmd`) to build the `ffmpeg` command. This method is more robust for handling complex arguments with spaces and special characters, ensuring `ffmpeg` receives the filter graph exactly as intended.
-
-**It appears your local `hypr-record-audio-video.sh` file was not updated with that specific fix.** The output you provided still shows the old `eval` command being used, which is why the `aout` error persists.
-
-**Please ensure your `hypr-record-audio-video.sh` file is updated with the content of the `hyprrecord-script-dual-audio` Canvas from my previous response.** It contains the fix for the `ffmpeg` command construction.
-
-Here's the relevant section from the Canvas that needs to be in your script:
-
-```bash
-    # Construct the full ffmpeg command
-    # Pass filter_complex and map_audio as separate arguments to avoid eval issues
-    ffmpeg_cmd=(
-        ffmpeg
-        -i "$VIDEO_TEMP_FILE_PATH"
-    )
-    
-    AUDIO_INPUT_COUNT=0
-
-    if [ "$MIC_AUDIO_OK" -eq 1 ]; then
-        ffmpeg_cmd+=( -i "$MIC_TEMP_FILE_PATH" )
-        AUDIO_INPUT_COUNT=$((AUDIO_INPUT_COUNT + 1))
-    else
-        notify-send "Mic Audio Warning!" "Microphone audio file empty or not found. No mic audio will be included."
-        echo "WARNING: Microphone audio file empty or not found. No mic audio will be included." >&2
-    fi
-    if [ "$OUTPUT_AUDIO_OK" -eq 1 ]; then
-        ffmpeg_cmd+=( -i "$OUTPUT_TEMP_FILE_PATH" )
-        AUDIO_INPUT_COUNT=$((AUDIO_INPUT_COUNT + 1))
-    else
-        notify-send "Output Audio Warning!" "System output audio file empty or not found. No system audio will be included."
-        echo "WARNING: System output audio file empty or not found. No system audio will be included." >&2
-    fi
-
-    AUDIO_NOTIFY_MSG=""
-    if [ "$AUDIO_INPUT_COUNT" -eq 2 ]; then
-        ffmpeg_cmd+=( -filter_complex "[1:a][2:a]amix=inputs=2:duration=longest[aout]" )
-        ffmpeg_cmd+=( -map "[aout]" )
-        AUDIO_NOTIFY_MSG="(with mic and system audio)"
-    elif [ "$AUDIO_INPUT_COUNT" -eq 1 ]; then
-        ffmpeg_cmd+=( -map 1:a:0 ) # Audio is the second input
-        if [ "$MIC_AUDIO_OK" -eq 1 ]; then
-            AUDIO_NOTIFY_MSG="(with microphone audio only)"
-        else # Must be OUTPUT_AUDIO_OK
-            AUDIO_NOTIFY_MSG="(with system audio output only)"
-        fi
-    else
-        AUDIO_NOTIFY_MSG="(no audio recorded)"
-        # No audio mapping needed
-    fi
-
-    notify-send "Merging Recording..." "Combining video and audio. This may may take a moment. $AUDIO_NOTIFY_MSG"
-
-    # Add common video/audio encoding options
-    ffmpeg_cmd+=(
-        -map 0:v:0
-        -c:v libx264
-        -pix_fmt yuv420p
-        -crf "$VIDEO_CRF"
-        -c:a aac
-        -b:a 192k
-        -strict -2
-        -y "$FINAL_OUTPUT_FILE_PATH"
-        -loglevel warning
-    )
-
-    # Execute the ffmpeg command
-    "${ffmpeg_cmd[@]}"
-```
-
-**After you've confirmed your local file has this exact `ffmpeg_cmd` array construction, please run the script again and provide the full terminal output.** This should resolve the `ffmpeg` error and allow us to see if the microphone audio is finally being includ
