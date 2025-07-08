@@ -25,23 +25,25 @@ if [ -z "$REGION" ]; then
     CANCELLED_BY_USER=true
     notify-send "Screenshot Cancelled" "Region selection aborted."
 else
-    TEMP_SCREENSHOT="/tmp/grim_temp_$(date +%s%N).png"
-    grim -g "$REGION" "$TEMP_SCREENSHOT"
+    TEMP_GRIM_OUTPUT="/tmp/grim_temp_$(date +%s%N).png" # Temporary file for grim output
+    grim -g "$REGION" "$TEMP_GRIM_OUTPUT"
     grim_exit_code=$?
     
-    if [ $grim_exit_code -ne 0 ] || [ ! -f "$TEMP_SCREENSHOT" ]; then
+    if [ $grim_exit_code -ne 0 ] || [ ! -f "$TEMP_GRIM_OUTPUT" ]; then
         SCREENSHOT_ERROR=true
         notify-send "Screenshot Error" "Grim failed to capture region."
     else
-        swappy -f "$TEMP_SCREENSHOT" "$FILEPATH"
+        # Pass the grim output to swappy for editing, and tell swappy to save to FILEPATH
+        # swappy -f input_file -o output_file
+        swappy -f "$TEMP_GRIM_OUTPUT" -o "$FILEPATH"
         swappy_exit_code=$?
 
-        if [ $swappy_exit_code -eq 0 ] && [ -f "$FILEPATH" ]; then
+        if [ $swappy_exit_code -eq 0 ] && [ -f "$FILEPATH" ] && [ -s "$FILEPATH" ]; then # Check if final file exists AND is not empty
             ACTION_TAKEN=true
         else
-            # If swappy exited non-zero or final file not created, it's an error or cancellation within swappy
-            if [ ! -f "$FILEPATH" ]; then 
-                CANCELLED_BY_USER=true # Assume cancellation if file not created by swappy
+            # If swappy exited non-zero, or final file not created/empty, it's an error or cancellation within swappy
+            if [ ! -f "$FILEPATH" ] || [ ! -s "$FILEPATH" ]; then 
+                CANCELLED_BY_USER=true # Assume cancellation if file not created or is empty
                 notify-send "Screenshot Cancelled" "Swappy editing aborted or failed to save."
             else
                 SCREENSHOT_ERROR=true
@@ -49,7 +51,8 @@ else
             fi
         fi
     fi
-    rm -f "$TEMP_SCREENSHOT" # Clean up temporary grim file
+    # Clean up temporary grim file regardless of swappy's outcome
+    rm -f "$TEMP_GRIM_OUTPUT" 
 fi
 
 # Handle final notifications based on status flags
