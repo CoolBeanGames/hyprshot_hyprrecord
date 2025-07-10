@@ -11,6 +11,7 @@ RECORD_AUDIO_DIR="$HOME/.cache/recordings_audio" # Temporary directory for audio
 FINAL_RECORD_DIR="$HOME/Videos/Recordings"       # Final destination for merged file
 
 # AUDIO_SOURCES:
+# To find your sources, run: pactl list sources | grep "Name:"
 # MIC_SOURCE: Your microphone input.
 MIC_SOURCE="alsa_input.usb-PreSonus_AudioBox_USB_96_000000000000-00.analog-stereo"
 # OUTPUT_MONITOR_SOURCE: The monitor of your system's audio output (what you hear).
@@ -178,33 +179,41 @@ else
     # --- Start New Recording ---
     TEMP_SUFFIX="$(date +%Y%m%d_%H%M%S)_$$"
     VIDEO_TEMP_FILE="$RECORD_VIDEO_DIR/temp_video_${TEMP_SUFFIX}.mp4"
-    MIC_TEMP_FILE="$RECORD_AUDIO_DIR/temp_mic_audio_${TEMP_SUFFIX}.flac" # Mic temp file
-    OUTPUT_TEMP_FILE="$RECORD_AUDIO_DIR/temp_output_audio_${TEMP_SUFFIX}.flac" # Output temp file
+    MIC_TEMP_FILE="$RECORD_AUDIO_DIR/temp_mic_audio_${TEMP_SUFFIX}.flac"
+    OUTPUT_TEMP_FILE="$RECORD_AUDIO_DIR/temp_output_audio_${TEMP_SUFFIX}.flac"
     FINAL_OUTPUT_FILE="$FINAL_RECORD_DIR/recording_${TEMP_SUFFIX}.mp4"
 
-    # Removed Rofi menu, always assume "region"
-    notify-send "Recording Started!" "Select region to record with dual audio." # Updated notification
-    # Removed --crf from wf-recorder as it's not supported directly.
-    wf-recorder -g "$(slurp)" -f "$VIDEO_TEMP_FILE" --codec=libx264 &
+    notify-send "Screen Recorder" "Please select a region to record."
+    
+    # Get the screen geometry from slurp first. This is the blocking part.
+    GEOMETRY=$(slurp)
+
+    # Check if slurp was cancelled (e.g., by pressing Esc).
+    if [ -z "$GEOMETRY" ]; then
+        notify-send "Recording Cancelled" "No region selected."
+        exit 0
+    fi
+
+    notify-send "Recording Started!" "Starting video and audio capture for the selected region."
+
+    # Start Video Recorder
+    wf-recorder -g "$GEOMETRY" -f "$VIDEO_TEMP_FILE" --codec=libx264 &
     VIDEO_PID=$!
     
-    sleep 1 # Give wf-recorder a moment
-    
+    # Start Audio Recorders
+    # Disable exit-on-error temporarily in case one of the audio devices is not available
+    set +e
     echo "DEBUG: Attempting to start parecord for MIC: '$MIC_SOURCE' to file: '$MIC_TEMP_FILE'"
-    set +e # Disable exit on error for parecord
-    parecord --device="$MIC_SOURCE" "$MIC_TEMP_FILE" 2>&1 &
+    parecord --device="$MIC_SOURCE" "$MIC_TEMP_FILE" &
     MIC_AUDIO_PID=$! # Get PID of mic parecord
-    set -e # Re-enable exit on error
     
-    sleep 2 # Increased sleep for parecord to write data
-
     echo "DEBUG: Attempting to start parecord for OUTPUT: '$OUTPUT_MONITOR_SOURCE' to file: '$OUTPUT_TEMP_FILE'"
-    set +e # Disable exit on error for parecord
-    parecord --device="$OUTPUT_MONITOR_SOURCE" "$OUTPUT_TEMP_FILE" 2>&1 &
+    parecord --device="$OUTPUT_MONITOR_SOURCE" "$OUTPUT_TEMP_FILE" &
     OUTPUT_AUDIO_PID=$! # Get PID of output parecord
     set -e # Re-enable exit on error
     
-    sleep 2 # Increased sleep for parecord to write data
+    # Give recorders a moment to initialize before checking their status
+    sleep 0.5
 
     # Check if audio recorders actually launched (PID is 0 or process doesn't exist)
     MIC_RECORDER_ACTIVE=0
@@ -222,6 +231,9 @@ else
     # Validate VIDEO PID
     if [ -z "$VIDEO_PID" ] || [ "$VIDEO_PID" -le 0 ] || ! kill -0 "$VIDEO_PID" 2>/dev/null; then
         notify-send "Recording Error!" "Failed to start video recorder (wf-recorder). PID: $VIDEO_PID"
+        # Also kill any audio recorders that might have started
+        [ "$MIC_RECORDER_ACTIVE" -eq 1 ] && kill -TERM "$MIC_AUDIO_PID"
+        [ "$OUTPUT_RECORDER_ACTIVE" -eq 1 ] && kill -TERM "$OUTPUT_AUDIO_PID"
         exit 1
     fi
     
